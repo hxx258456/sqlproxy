@@ -16,7 +16,6 @@ func TestConvertToOracle(t *testing.T) {
 	Init(map[string][]string{
 		"conf_infos": {"eventId", "conferenceId"},
 	})
-
 	testCases := []struct {
 		in, out string
 	}{
@@ -60,6 +59,36 @@ func TestConvertToOracle(t *testing.T) {
 		//	in:  "delete from meet_conference_extrainfo where `conferenceId` = '239816811'",
 		//	out: `delete from meet_conference_extrainfo where "conferenceId" = '239816811'`,
 		//},
+		// test convert ddl
+		{
+			in:  "CREATE TABLE IF NOT EXISTS `baas_file` (\n  `id` int(8) unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增ID',\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',\n  `is_del` INTEGER(4) NOT NULL DEFAULT '0',\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',\n  `name` varchar(255) NOT NULL DEFAULT '' COMMENT '文件名',\n  `path` varchar(255) NOT NULL DEFAULT '' COMMENT '存储路径',\n  `md5` varchar(32) NOT NULL DEFAULT '' COMMENT 'md5值',\n  `size` int(16) NOT NULL DEFAULT '0' COMMENT '文件大小',\n  `suffix` varchar(255) NOT NULL COMMENT '文件类型',\n  PRIMARY KEY (`id`),\n  KEY `ix_md5_name` (`md5`,`name`)\n) ENGINE=InnoDB AUTO_INCREMENT=493 DEFAULT CHARSET=utf8 COMMENT='文件管理表'",
+			out: "",
+		},
+		// test dm ddl
+		{
+			in:  "CREATE TABLE \"baas-go\".\"baas_file\"\n(\n \"id\" BIGINT IDENTITY(1,1) NOT NULL,\n \"created_at\" TIMESTAMP(0) DEFAULT (CURRENT_TIMESTAMP()),\n \"is_del\" TINYINT DEFAULT (0),\n \"updated_at\" TIMESTAMP(0) DEFAULT (CURRENT_TIMESTAMP()),\n \"name\" VARCHAR(255 CHAR),\n \"path\" VARCHAR(255 CHAR),\n \"md5\" VARCHAR(32 CHAR),\n \"size\" INT DEFAULT (0),\n \"suffix\" VARCHAR(255 CHAR)\n);\n",
+			out: "",
+		},
+		// drop table
+		{
+			in:  "drop table IF EXISTS webcal_live_info",
+			out: "",
+		},
+		// create table
+		{
+			in:  "CREATE TABLE `bi_input_group` (\n  `bkid` bigint(20) NOT NULL AUTO_INCREMENT,\n  `bknd` bigint(20) DEFAULT NULL,\n  `nver` bigint(20) DEFAULT NULL,\n  `bfail` char(1) DEFAULT NULL,\n  `s_function_id` bigint(20) DEFAULT NULL,\n  `code` varchar(200) DEFAULT NULL,\n  `name` varchar(200) DEFAULT NULL,\n  `bnum` char(1) DEFAULT NULL,\n  `edittime` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  `succeedtime` datetime DEFAULT NULL,\n  `bsys` char(1) DEFAULT NULL,\n  `bhide` char(1) DEFAULT NULL,\n  `b_cpxid` decimal(18,0) DEFAULT NULL,\n  PRIMARY KEY (`bkid`)\n) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4;",
+			out: "",
+		},
+		// fk
+		{
+			in:  "CREATE TABLE `saas_network` (\n  `id` bigint(20) NOT NULL AUTO_INCREMENT,\n  `created_at` datetime(3) DEFAULT NULL,\n  `updated_at` datetime(3) DEFAULT NULL,\n  `is_del` bigint(20) unsigned DEFAULT NULL,\n  `NetworkID` varchar(191) NOT NULL,\n  `user_phone` char(16) NOT NULL,\n  `description` longtext,\n  `BaseCIDR` varchar(191) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uni_saas_network_network_id` (`NetworkID`),\n  UNIQUE KEY `uni_saas_network_base_c_id_r` (`BaseCIDR`),\n  KEY `fk_saas_user_networks` (`user_phone`),\n  CONSTRAINT `fk_saas_user_networks` FOREIGN KEY (`user_phone`) REFERENCES `saas_user` (`phone`)\n) COMMENT '网络表' ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4;",
+			out: "",
+		},
+		// test alter fk
+		{
+			in:  "alter table `saas` add CONSTRAINT `fk_saas_user_networks` FOREIGN KEY (`user_phone`) REFERENCES `saas_user` (`phone`);",
+			out: "",
+		},
 	}
 
 	converter := NewOracleConverter(
@@ -94,10 +123,10 @@ func TestConvertToOracle(t *testing.T) {
 	)
 	for i, tcase := range testCases {
 		t.Run(fmt.Sprintf("testcase-%d", i+1), func(t *testing.T) {
-			oSql, _, err := converter.Convert(tcase.in)
+			_, oSql, _, err := converter.Convert(tcase.in)
 			assert.Nil(t, err)
-			assert.Equal(t, tcase.out, oSql)
-			log.Println(oSql)
+			assert.Equal(t, tcase.out, oSql[0])
+			log.Println(oSql[0])
 		})
 	}
 }
@@ -122,12 +151,12 @@ func TestConvertArgs(t *testing.T) {
 			},
 		},
 	)
-	newSQL, newArgs, err := converter.Convert(sql, args...)
+	_, newSQL, newArgs, err := converter.Convert(sql, args...)
 	assert.Nil(t, err)
 	assert.NotEqual(t, args, newArgs)
 	t.Logf("newSQL: %s, newArgs: %v", newSQL, newArgs)
 
-	formatSQL, err := Format(newSQL, newArgs)
+	formatSQL, err := Format(newSQL[0], newArgs)
 	assert.Nil(t, err)
 	t.Logf("formatSQL: %s", formatSQL)
 

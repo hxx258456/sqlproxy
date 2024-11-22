@@ -122,10 +122,12 @@ func getConverter(db dbQuerier, alias, driverName, converterName string) (sqlpar
 		if err != nil {
 			return nil, err
 		}
+
 	}
 
 	golog.Info("convertSQLPlugin", "wrapConverter", fmt.Sprintf("alias: %s, converterName: %s", alias, converterName), 0)
 	converter := sqlparser.GetSQLConverter(converterName, tableUniqueIndexs, tableColumns, incrementColumns)
+
 	return converter, nil
 }
 

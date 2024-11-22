@@ -91,33 +91,34 @@ func (c *ClientConn) GetBackendDB() *backend.BackendProxy {
 	if c.txConn != nil {
 		return c.txConn
 	}
-	if backend := c.proxy.GetNode(c.db); backend != nil {
+	if backend := c.proxy.GetNode("TEST"); backend != nil {
 		return backend
 	}
 	return nil
 }
 
 func (c *ClientConn) IsAllowConnect() bool {
-	clientHost, _, err := net.SplitHostPort(c.c.RemoteAddr().String())
-	if err != nil {
-		fmt.Println(err)
-	}
-	clientIP := net.ParseIP(clientHost)
-
-	current, _, _ := c.proxy.allowipsIndex.Get()
-	ipVec := c.proxy.allowips[current]
-	if ipVecLen := len(ipVec); ipVecLen == 0 {
-		return true
-	}
-	for _, ip := range ipVec {
-		if ip.Match(clientIP) {
-			return true
-		}
-	}
-
-	golog.Error("server", "IsAllowConnect", "error", mysql.ER_ACCESS_DENIED_ERROR,
-		"ip address", c.c.RemoteAddr().String(), " access denied by kindshard.")
-	return false
+	//clientHost, _, err := net.SplitHostPort(c.c.RemoteAddr().String())
+	//if err != nil {
+	//	fmt.Println(err)
+	//}
+	//clientIP := net.ParseIP(clientHost)
+	//
+	//current, _, _ := c.proxy.allowipsIndex.Get()
+	//ipVec := c.proxy.allowips[current]
+	//if ipVecLen := len(ipVec); ipVecLen == 0 {
+	//	return true
+	//}
+	//for _, ip := range ipVec {
+	//	if ip.Match(clientIP) {
+	//		return true
+	//	}
+	//}
+	//
+	//golog.Error("server", "IsAllowConnect", "error", mysql.ER_ACCESS_DENIED_ERROR,
+	//	"ip address", c.c.RemoteAddr().String(), " access denied by kindshard.")
+	//return false
+	return true
 }
 
 func (c *ClientConn) Handshake() error {

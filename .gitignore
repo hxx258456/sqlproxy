@@ -11,3 +11,6 @@ core/hack/version.go
 main
 etc/*.log
 sqlproxy
+*.exe
+*.ddl
+*.sql

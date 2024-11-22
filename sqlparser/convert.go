@@ -5,7 +5,7 @@ const (
 )
 
 type SQLConverter interface {
-	Convert(sql string, args ...interface{}) (string, []interface{}, error)
+	Convert(sql string, args ...interface{}) ([]string, []string, []interface{}, error)
 }
 
 func GetSQLConverter(name string, tableUniqueIndexs map[string]map[string][]string, tableColumns map[string][]string, incrementColumns map[string]map[string]int) SQLConverter {

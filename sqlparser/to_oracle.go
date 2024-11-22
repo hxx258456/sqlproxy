@@ -6,6 +6,7 @@ import (
 	"sqlproxy/core/golog"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type OracleConverter struct {
@@ -28,53 +29,63 @@ func NewOracleConverter(tableUniqueIndexs map[string]map[string][]string, tableC
 	}
 }
 
-// convert sql from mysql to oracle
+// Convert sql from mysql to oracle
 // 1. parse sql to ast
 // 2. check if need to convert
 // 3. convert mysql ast to oracle ast
 // 4. rebuild oracle sql from ast
-func (this *OracleConverter) Convert(sql string, args ...interface{}) (string, []interface{}, error) {
-	if !supportConvert(sql) {
-		return sql, args, nil
+func (c *OracleConverter) Convert(sql string, args ...interface{}) ([]string, []string, []interface{}, error) {
+	sqlType := Preview(sql)
+	if !supportConvert(sqlType) {
+		return nil, []string{sql}, args, nil
 	}
+	sql, fks := SplitFk(sql)
 	stmt, err := Parse(sql)
 	if err != nil {
 		log.Printf("ignoring error parsing sql '%s': %v", sql, err)
-		return "", args, err
+		return nil, nil, args, err
 	}
+	for i, fk := range fks {
+		fks[i] = fmt.Sprintf("alter table `%s` add %s;", stmt.(*DDL).NewName.Name, fk)
+	}
+
 	// 转换statement时可能带来参数数量的变化，例如：replace转merge， insert去掉increment column等，
 	// 因此，参数args也需要作相应的配套处理
-	oracleStmt, args := this.convertStmt(stmt, args...)
+	oracleStmt, args := c.convertStmt(stmt, args...)
 
 	if oracleStmt == nil {
-		return this.replaceCommonIdents(sql), args, nil
+		return fks, []string{c.replaceCommonIdents(sql)}, args, nil
 	}
 	buf := NewTrackedBuffer(nil).WriteNode(oracleStmt)
-	convertSQL := this.replaceCommonIdents(buf.String())
-	golog.Debug("OracleConverter", "Convert", "ConvertSQL", 0, convertSQL)
-	return convertSQL, args, nil
+	convertSQL := c.replaceCommonIdents(buf.String())
+	golog.Info("OracleConverter", "Convert", "ConvertSQL", 0, convertSQL)
+	return fks, []string{convertSQL}, args, nil
 }
 
-func (this *OracleConverter) convertStmt(stmt Statement, args ...interface{}) (Statement, []interface{}) {
+func (c *OracleConverter) convertStmt(stmt Statement, args ...interface{}) (Statement, []interface{}) {
 	var newStmt Statement
 	switch stmt.(type) {
 	case *Insert:
-		newStmt = this.convertInsert(stmt.(*Insert))
+		newStmt = c.convertInsert(stmt.(*Insert))
 	case *Update:
-		newStmt = this.convertUpdateIncrement(stmt.(*Update))
+		newStmt = c.convertUpdateIncrement(stmt.(*Update))
 	case *Select:
-		newStmt = this.convertSelect(stmt.(*Select))
+		newStmt = c.convertSelect(stmt.(*Select))
+	case *DDL:
+		newStmt = c.convertDDL(stmt.(*DDL))
+	case *DBDDL:
+		newStmt = c.convertDBDDL(stmt.(*DBDDL))
 	default:
 		newStmt = stmt
 	}
 
-	if this.needConvertArgs(newStmt, args...) {
-		return this.convertStmtArgs(newStmt, args...)
+	if c.needConvertArgs(newStmt, args...) {
+		return c.convertStmtArgs(newStmt, args...)
 	}
 	return newStmt, args
 }
 
-func (this *OracleConverter) convertSelect(stmt *Select) Statement {
+func (c *OracleConverter) convertSelect(stmt *Select) Statement {
 	for _, expr := range stmt.From {
 		if t, ok := expr.(*AliasedTableExpr); ok {
 			if t.Hints != nil && t.Hints.Type == "force " {
@@ -85,7 +96,7 @@ func (this *OracleConverter) convertSelect(stmt *Select) Statement {
 	return stmt
 }
 
-func (this *OracleConverter) needConvertArgs(stmt Statement, args ...interface{}) bool {
+func (c *OracleConverter) needConvertArgs(stmt Statement, args ...interface{}) bool {
 	if len(args) == 0 {
 		return false
 	}
@@ -97,7 +108,7 @@ func (this *OracleConverter) needConvertArgs(stmt Statement, args ...interface{}
 	}
 }
 
-func (this *OracleConverter) convertStmtArgs(stmt Statement, args ...interface{}) (Statement, []interface{}) {
+func (c *OracleConverter) convertStmtArgs(stmt Statement, args ...interface{}) (Statement, []interface{}) {
 	newArgs := []interface{}{}
 	id := 1
 	visit := func(node SQLNode) (kcontinue bool, err error) {
@@ -118,9 +129,9 @@ func (this *OracleConverter) convertStmtArgs(stmt Statement, args ...interface{}
 	return stmt, newArgs
 }
 
-func (this *OracleConverter) convertInsert(stmt *Insert) Statement {
+func (c *OracleConverter) convertInsert(stmt *Insert) Statement {
 	// try to find auto increment columns and remove them
-	stmt = this.convertInsertIncrement(stmt)
+	stmt = c.convertInsertIncrement(stmt)
 	// write a method to walk ast tree, recognize all kinds of expr, and rebuild oracle ast
 	if stmt.Action == InsertStr && stmt.OnDup == nil {
 		return stmt
@@ -131,12 +142,12 @@ func (this *OracleConverter) convertInsert(stmt *Insert) Statement {
 	}
 
 	// find unique columns for table
-	condcols := this.getUniqueConditionColumns(stmt)
+	condcols := c.getUniqueConditionColumns(stmt)
 	if len(condcols) == 0 {
 		stmt.OnDup = nil
 		return stmt
 	}
-	tableExpr := this.buildMergeTableExpr(stmt, condcols)
+	tableExpr := c.buildMergeTableExpr(stmt, condcols)
 	matchedExpr := buildMatchedExpr(stmt, condcols)
 
 	if tableExpr == nil || len(matchedExpr) == 0 {
@@ -173,12 +184,12 @@ func buildValuesExpr(stmt *Insert) ValuesExpr {
 	return ValuesExpr(values)
 }
 
-func (this *OracleConverter) convertInsertIncrement(stmt *Insert) *Insert {
+func (c *OracleConverter) convertInsertIncrement(stmt *Insert) *Insert {
 	if _, ok := stmt.Rows.(Values); !ok {
 		return stmt
 	}
 
-	incrementColumns := this.incrementColumns[stmt.Table.Name.String()]
+	incrementColumns := c.incrementColumns[stmt.Table.Name.String()]
 	if incrementColumns == nil || len(incrementColumns) == 0 {
 		return stmt
 	}
@@ -186,7 +197,7 @@ func (this *OracleConverter) convertInsertIncrement(stmt *Insert) *Insert {
 	// 没有指定columns的补充columns
 	if len(stmt.Columns) == 0 {
 		stmt.Columns = []ColIdent{}
-		for _, column := range this.tableColumns[stmt.Table.Name.String()] {
+		for _, column := range c.tableColumns[stmt.Table.Name.String()] {
 			stmt.Columns = append(stmt.Columns, NewColIdent(column))
 		}
 	}
@@ -223,11 +234,11 @@ func (this *OracleConverter) convertInsertIncrement(stmt *Insert) *Insert {
 	return stmt
 }
 
-func (this *OracleConverter) convertUpdateIncrement(stmt *Update) *Update {
+func (c *OracleConverter) convertUpdateIncrement(stmt *Update) *Update {
 	if len(stmt.TableExprs) == 0 {
 		return stmt
 	}
-	incrementColumns := this.incrementColumns[getTableName(stmt)]
+	incrementColumns := c.incrementColumns[getTableName(stmt)]
 	if incrementColumns == nil || len(incrementColumns) == 0 {
 		return stmt
 	}
@@ -244,7 +255,7 @@ func (this *OracleConverter) convertUpdateIncrement(stmt *Update) *Update {
 	return stmt
 }
 
-func (this *OracleConverter) buildMergeTableExpr(stmt *Insert, condcols [][]string) *MergeTableExpr {
+func (c *OracleConverter) buildMergeTableExpr(stmt *Insert, condcols [][]string) *MergeTableExpr {
 	onCondition := buildJoinConditions(stmt, condcols)
 	if onCondition == nil {
 		return nil
@@ -262,10 +273,10 @@ func (this *OracleConverter) buildMergeTableExpr(stmt *Insert, condcols [][]stri
 	}
 }
 
-func (this *OracleConverter) getUniqueConditionColumns(stmt *Insert) [][]string {
+func (c *OracleConverter) getUniqueConditionColumns(stmt *Insert) [][]string {
 	condcols := [][]string{}
 	// Case1: If user has configured unique index condcols for the table, use it as condition condcols
-	tableIndexs := this.tableUniqueIndexs[stmt.Table.Name.String()]
+	tableIndexs := c.tableUniqueIndexs[stmt.Table.Name.String()]
 	for _, iii := range tableIndexs {
 		i := 0
 		for _, column := range stmt.Columns {
@@ -430,18 +441,85 @@ func buildJoinConditions(stmt *Insert, condcols [][]string) Expr {
 	return conditions
 }
 
-func (this *OracleConverter) replaceCommonIdents(sql string) string {
-	for old, new := range this.replaceChars {
+func (c *OracleConverter) replaceCommonIdents(sql string) string {
+	for old, new := range c.replaceChars {
 		sql = strings.Replace(sql, old, new, -1)
 	}
 	return sql
 }
 
-func supportConvert(sql string) bool {
-	switch Preview(sql) {
-	case StmtInsert, StmtReplace, StmtDelete, StmtSelect, StmtUpdate:
+func (c *OracleConverter) convertDDL(stmt *DDL) Statement {
+	switch stmt.Action {
+	case CreateStr:
+		newDmDdl := &DmDDL{}
+		newDmDdl.FromCreateDDL(stmt)
+		return newDmDdl
+	case AlterStr:
+		return nil
+	}
+	return nil
+}
+
+func (c *OracleConverter) covertUse(stmt *Use) Statement {
+	return &DmUse{DBName: stmt.DBName}
+}
+func (c *OracleConverter) convertDBDDL(stmt *DBDDL) Statement {
+	switch stmt.Action {
+	case CreateStr:
+		newDMDBDDL := &DMDBDDL{
+			Action:   stmt.Action,
+			DBName:   stmt.DBName,
+			IfExists: stmt.IfExists,
+			Charset:  stmt.Charset,
+			Collate:  stmt.Collate,
+		}
+		return newDMDBDDL
+	case DropStr:
+		newDMDBDDL := &DMDBDDL{
+			Action:   stmt.Action,
+			DBName:   stmt.DBName,
+			IfExists: stmt.IfExists,
+			Charset:  stmt.Charset,
+			Collate:  stmt.Collate,
+		}
+		return newDMDBDDL
+	}
+	return nil
+}
+
+func supportConvert(sqlType int) bool {
+	switch sqlType {
+	case StmtDDL, StmtInsert, StmtReplace, StmtDelete, StmtSelect, StmtUpdate, StmtUse:
 		return true
 	default:
 		return false
 	}
+}
+
+func SplitFk(sql string) (string, []string) {
+	trimmed := StripLeadingComments(sql)
+
+	firstWord := trimmed
+	if end := strings.IndexFunc(trimmed, unicode.IsSpace); end != -1 {
+		firstWord = trimmed[:end]
+	}
+	firstWord = strings.TrimLeftFunc(firstWord, func(r rune) bool { return !unicode.IsLetter(r) })
+	// Comparison is done in order of priority.
+	loweredFirstWord := strings.ToLower(firstWord)
+	if loweredFirstWord != "create" {
+		return sql, nil
+	}
+	lists := strings.Split(sql, "\n")
+	var fks []string
+	for i, v := range lists {
+		if strings.Contains(v, "CONSTRAINT") || strings.Contains(v, "FOREIGN KEY") || strings.Contains(v, "constraint") || strings.Contains(v, "foreign key") {
+			lists = append(lists[:i], lists[i+1:]...)
+			fks = append(fks, v)
+		}
+	}
+
+	lists[len(lists)-2] = strings.TrimRight(lists[len(lists)-2], ",")
+	sql = strings.Join(lists, "\n")
+
+	return sql, fks
 }

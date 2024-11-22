@@ -85,6 +85,7 @@ func (n *BackendProxy) Exec(query string, args ...interface{}) (*mysql.Result, e
 	if n.db == nil {
 		return nil, ErrDbNullPointer
 	}
+
 	rs, err := n.db.Exec(query, args...)
 	if err != nil {
 		return nil, err

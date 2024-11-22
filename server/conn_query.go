@@ -56,7 +56,6 @@ func (c *ClientConn) handleQuery(sql string) (err error) {
 		golog.Error("ClientConn", "handleQuery", err.Error(), c.connectionId /*"hasHandled", hasHandled,*/, "sql", sql)
 		return err
 	}
-
 	switch v := stmt.(type) {
 	case *sqlparser.Show:
 		return c.handleShow(v, sql, nil)
@@ -78,6 +77,7 @@ func (c *ClientConn) handleQuery(sql string) (err error) {
 		return c.handleCommit()
 	case *sqlparser.Rollback:
 		return c.handleRollback()
+
 	// case *sqlparser.Admin: // kingshard自己加的指令
 	// 	if c.user == "root" {
 	// 		return c.handleAdmin(v)
